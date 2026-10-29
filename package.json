@@ -1,29 +1,11 @@
 {
-  "name": "photo-albums",
-  "version": "1.0.0",
+  "name": "photo-albums-tags",
+  "private": true,
   "description": "Photo albums with tags, server-side thumbnails and revocable public share links",
-  "main": "index.js",
   "scripts": {
-    "start": "node src/server.js",
-    "seed": "node scripts/seed.js",
-    "test": "node --test \"test/*.test.js\""
-  },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {
-    "archiver": "^8.0.0",
-    "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^13.0.3",
-    "cookie-parser": "^1.4.7",
-    "dotenv": "^18.0.9",
-    "exifr": "^7.1.3",
-    "express": "^5.3.0",
-    "multer": "^2.5.0",
-    "sharp": "^0.35.5"
-  },
-  "devDependencies": {
-    "supertest": "^7.3.1"
-  },
-  "private": true
+    "install:all": "npm --prefix backend install",
+    "start": "npm --prefix backend start",
+    "seed": "npm --prefix backend run seed",
+    "test": "npm --prefix backend test"
+  }
 }

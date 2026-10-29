@@ -6,12 +6,14 @@ Stack: Node.js 20+, Express 5, SQLite (better-sqlite3), sharp (thumbnails), exif
 
 ## Run it
 
+Needs Node.js 20 or newer.
+
 ```bash
-npm install
-cp .env.example .env      # all settings have defaults, the file is optional
+npm run install:all       # installs the backend (the frontend has no build step)
+cp .env.example .env      # optional, every setting has a default
 npm run seed              # demo user, 12 generated photos, 2 albums
 npm start                 # http://localhost:3000
-npm test                  # 11 backend tests
+npm test                  # backend tests
 ```
 
 Demo login (created by `npm run seed`): `demo@example.com` / `demo12345`.
@@ -32,13 +34,13 @@ Settings are listed in `.env.example` (port, data folder, upload limits, secure 
 
 ## How the two key requirements work
 
-**Thumbnails are generated on the server.** `src/photoStore.js` saves the original and a 320px JPEG thumbnail (`src/images.js`, sharp) during upload. The gallery, album pages and the shared page only request `/thumb` URLs. Full-size images are requested only in the full-screen viewer.
+**Thumbnails are generated on the server.** `backend/src/photoStore.js` saves the original and a 320px JPEG thumbnail (`backend/src/images.js`, sharp) during upload. The gallery, album pages and the shared page only request `/thumb` URLs. Full-size images are requested only in the full-screen viewer.
 
-**Turning off sharing blocks access immediately, checked on the server.** A shared album has a random token (`albums.share_token`, 18 random bytes). Every public request (`src/routes/public.js`) looks the token up in the database. Turning sharing off sets the token to `NULL`, so the next request returns 404 for the album page, thumbnails and full-size files. The server keeps no cache of the token and public responses send `Cache-Control: no-store`, so browsers should not reuse them. This stops all new access; it cannot take back a photo someone already downloaded or saved. A photo is only served through a link if it is in that album. The tests cover this.
+**Turning off sharing blocks access immediately, checked on the server.** A shared album has a random token (`albums.share_token`, 18 random bytes). Every public request (`backend/src/routes/public.js`) looks the token up in the database. Turning sharing off sets the token to `NULL`, so the next request returns 404 for the album page, thumbnails and full-size files. The server keeps no cache of the token and public responses send `Cache-Control: no-store`, so browsers should not reuse them. This stops all new access; it cannot take back a photo someone already downloaded or saved. A photo is only served through a link if it is in that album. The tests cover this.
 
 ## Data model
 
-SQLite, created in `src/db.js`.
+SQLite, created in `backend/src/db.js`.
 
 | Table | Purpose |
 | --- | --- |
@@ -53,29 +55,33 @@ SQLite, created in `src/db.js`.
 
 ## Design decisions
 
-- Own backend with SQLite files on disk: no external services, so it runs after `npm install`.
-- Sessions in the database with an httpOnly, SameSite=Lax cookie. Passwords hashed with bcrypt.
-- Every route validates input on the server (`src/validate.js`): email, password length, names (max 80), tags (max 20, 30 chars, allowed characters), ids, upload count and size. Errors are JSON `{ "error": "..." }` and the UI shows them.
-- File type is detected from the bytes with sharp, not from the client mime type or file name. Stored files get random names.
+- Separate `backend/` (REST API, database, file handling, tests) and `frontend/` (static HTML, CSS and ES modules that call the API). The backend also serves the frontend files, so one command runs everything.
+- Own backend with SQLite files on disk: no external services, so it runs after install.
+- Sessions in the database with an httpOnly, SameSite=Lax cookie that expires after 7 days. Passwords hashed with bcrypt.
+- Every route validates input on the server (`backend/src/validate.js`): email, password length, names (max 80), tags (max 20, 30 chars, allowed characters), ids, upload count and size. Errors are JSON `{ "error": "..." }` and the UI shows them. Unexpected errors return a generic 500 and are logged on the server only.
+- File type is detected from the bytes with sharp, not from the client mime type or file name. Stored files get random names. Images over 50 megapixels are rejected. Files are removed again if saving to the database fails.
+- Security checks that fit this scope: non-GET requests with a foreign `Origin` header are rejected (on top of SameSite cookies), login and register are rate limited per IP (in memory), uploads are limited by file size, file count and number of form parts, and every photo and album query is scoped to the logged-in user.
 - The frontend builds the DOM with `textContent`, never `innerHTML`, so photo names and tags cannot inject HTML.
-- Every photo and album query is scoped to the logged-in user.
+- Settings come from environment variables (`.env`, ignored by git). `.env.example` lists them all. No secret is needed to run the app.
 
 ## Tests
 
-`npm test` runs 11 tests (`test/`) against the real app with a temporary database and real image files generated with sharp:
-thumbnail generation, multi-upload and invalid file rejection, EXIF sorting with fallback, tag search (all/any) and tag validation, per-user isolation, album management and cover rules, share link on/off (including thumbnails and full files), public link isolation, ZIP download, signup/login/logout and error responses.
+`npm test` runs 12 tests (`backend/test/`) against the real app with a temporary database and real image files generated with sharp:
+thumbnail generation, multi-upload and invalid file rejection, EXIF sorting with fallback, tag search (all/any) and tag validation, per-user isolation, album management and cover rules, share link on/off (including thumbnails and full files), public link isolation, ZIP download, signup/login/logout, cross-site request blocking, login rate limiting and error responses.
 
 ## What is finished, what is not
 
 Finished: every core feature and both stretch features above.
 
-Not done, and what I would do with more time:
-- Uploads go through memory (`multer.memoryStorage`, 10 MB limit per file). Streaming to disk would handle bigger files.
-- Rate limiting on login and CSRF tokens (SameSite=Lax cookies are the only protection now).
-- Password reset and email verification.
-- Thumbnails of different sizes (for retina screens) and pagination or infinite scroll for very large libraries.
-- Browser end-to-end tests. The UI was checked by hand and with a headless browser run, not with committed tests.
-- Storing files in object storage instead of the local disk.
+Known limits and what I would do with more time:
+- Uploads are buffered in memory (max 10 files of 10 MB per request). Streaming to disk would handle bigger files.
+- The rate limiter is in memory and per process. A shared store (Redis) would be needed with several servers.
+- Sessions use SameSite cookies plus an Origin check, but no CSRF tokens.
+- No password reset, email verification or per-user storage quota.
+- Files are on local disk. Object storage would be needed to scale or deploy on a host with temporary disk.
+- Thumbnails come in one size. Several sizes and pagination would help large libraries.
+- Tests: 12 automated backend tests. The UI was checked by hand in a headless browser (login, mobile layout, tag search, viewer keys, share page) but there is no automated browser test suite yet.
+- No live deployment.
 
 ## AI tools used
 
@@ -84,13 +90,19 @@ Instinct, an AI assistant, was used for scaffolding the project, implementing th
 ## Project layout
 
 ```
-src/app.js          app wiring, error handler
-src/auth.js         register/login/logout, session middleware
-src/routes/         photos.js, albums.js, public.js
-src/photoStore.js   saving photos, thumbnails, tag search query
-src/images.js       sharp and EXIF helpers
-src/validate.js     input validation
-scripts/seed.js     demo data
-public/             frontend (index.html, shared.html, js/*.js, style.css)
-test/               backend tests
+backend/
+  src/app.js          app wiring, middleware order, error handler
+  src/config.js       environment settings
+  src/db.js           SQLite schema
+  src/auth.js         register/login/logout, session middleware
+  src/security.js     same-origin check, rate limiter
+  src/routes/         photos.js, albums.js, public.js
+  src/photoStore.js   saving photos, thumbnails, tag search query
+  src/images.js       sharp and EXIF helpers
+  src/validate.js     input validation and HttpError
+  scripts/seed.js     demo data
+  test/               automated tests
+frontend/
+  index.html, shared.html, style.css
+  js/                 api.js, ui.js, auth.js, photos.js, albums.js, viewer.js, shared.js, app.js
 ```

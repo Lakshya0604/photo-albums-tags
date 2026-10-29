@@ -31,9 +31,9 @@ function createApp(overrides = {}) {
   app.use('/api/public', publicRouter(db, config));
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 
-  app.use(express.static(path.join(__dirname, '..', 'public')));
+  app.use(express.static(path.join(__dirname, '..', '..', 'frontend')));
   // Share links open the same page; the page asks the public API for the album.
-  app.get('/s/:token', (req, res) => res.sendFile(path.join(__dirname, '..', 'public', 'shared.html')));
+  app.get('/s/:token', (req, res) => res.sendFile(path.join(__dirname, '..', '..', 'frontend', 'shared.html')));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
