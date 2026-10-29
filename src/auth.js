@@ -50,7 +50,8 @@ function requireUser(db) {
   return (req, res, next) => {
     const token = req.cookies?.[COOKIE];
     const row = token
-      ? db.prepare('SELECT u.id, u.email FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?').get(token)
+      ? db.prepare(`SELECT u.id, u.email FROM sessions s JOIN users u ON u.id = s.user_id
+           WHERE s.token = ? AND s.created_at > datetime('now', '-7 days')`).get(token)
       : null;
     if (!row) throw new HttpError(401, 'Please log in.');
     req.user = row;

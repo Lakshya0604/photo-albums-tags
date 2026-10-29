@@ -8,7 +8,7 @@ function photosRouter(db, config) {
   const router = express.Router();
   const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: config.maxFiles },
+    limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: config.maxFiles, fields: 5, fieldSize: 2048, parts: config.maxFiles + 5 },
   });
 
   function ownPhoto(req) {

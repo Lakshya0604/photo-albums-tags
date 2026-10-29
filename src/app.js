@@ -7,12 +7,15 @@ const { authRouter, requireUser } = require('./auth');
 const { photosRouter } = require('./routes/photos');
 const { albumsRouter } = require('./routes/albums');
 const { publicRouter } = require('./routes/public');
+const { sameOriginOnly, rateLimit } = require('./security');
 
 function createApp(overrides = {}) {
   const config = loadConfig(overrides);
   const db = openDb(config.dataDir);
   const app = express();
   app.disable('x-powered-by');
+  app.set('trust proxy', 'loopback');
+  app.use(sameOriginOnly);
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
   app.use((req, res, next) => {
@@ -21,7 +24,7 @@ function createApp(overrides = {}) {
   });
 
   const needUser = requireUser(db);
-  app.use('/api/auth', authRouter(db, config));
+  app.use('/api/auth', rateLimit({ max: config.authRateLimit, windowMs: 10 * 60 * 1000 }), authRouter(db, config));
   app.get('/api/me', needUser, (req, res) => res.json({ user: req.user }));
   app.use('/api/photos', needUser, photosRouter(db, config));
   app.use('/api/albums', needUser, albumsRouter(db, config));

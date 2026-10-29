@@ -24,18 +24,29 @@ async function savePhoto(db, config, userId, file) {
   const thumbName = `${id}.jpg`;
   const d = dirs(config);
 
-  const thumb = await images.makeThumbnail(file.buffer);
-  fs.writeFileSync(path.join(d.originals, storedName), file.buffer);
-  fs.writeFileSync(path.join(d.thumbs, thumbName), thumb);
-
+  let thumb;
+  try {
+    thumb = await images.makeThumbnail(file.buffer);
+  } catch {
+    return { error: `${file.originalname}: could not process this image.` };
+  }
   const takenAt = await images.readTakenAt(file.buffer);
   const uploadedAt = new Date().toISOString();
-  const row = db
+  fs.writeFileSync(path.join(d.originals, storedName), file.buffer);
+  fs.writeFileSync(path.join(d.thumbs, thumbName), thumb);
+  let row;
+  try {
+    row = db
     .prepare(
       `INSERT INTO photos (user_id, original_name, stored_name, thumb_name, mime, size, width, height, taken_at, uploaded_at, sort_date)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(userId, file.originalname.slice(0, 200), storedName, thumbName, info.mime, file.size, info.width, info.height, takenAt, uploadedAt, takenAt || uploadedAt);
+  } catch (err) {
+    // do not leave orphan files when the database insert fails
+    removeFiles(config, { stored_name: storedName, thumb_name: thumbName });
+    throw err;
+  }
   return { id: Number(row.lastInsertRowid) };
 }
 

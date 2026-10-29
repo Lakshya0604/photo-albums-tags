@@ -2,13 +2,15 @@ const sharp = require('sharp');
 const exifr = require('exifr');
 
 const THUMB_SIZE = 320;
+const MAX_PIXELS = 50_000_000; // rejects decompression bombs
+
 const ALLOWED = { jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' };
 
 // Real format check from the file bytes, not the client-supplied mime type.
 async function inspect(buffer) {
   let meta;
   try {
-    meta = await sharp(buffer).metadata();
+    meta = await sharp(buffer, { limitInputPixels: MAX_PIXELS }).metadata();
   } catch {
     return null;
   }
@@ -17,7 +19,7 @@ async function inspect(buffer) {
 }
 
 async function makeThumbnail(buffer) {
-  return sharp(buffer)
+  return sharp(buffer, { limitInputPixels: MAX_PIXELS })
     .rotate() // respect EXIF orientation
     .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'cover' })
     .jpeg({ quality: 72 })
