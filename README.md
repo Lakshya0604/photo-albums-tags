@@ -92,7 +92,7 @@ Known limits and what I would do with more time:
 
 ## AI tools used
 
-Instinct, an AI assistant, was used for scaffolding the project, implementing the first version of the backend and frontend, writing the tests and this README, and debugging library API differences (archiver 8, Express 5, sharp EXIF writing). The code is explained in the video walkthrough. The demo photos are generated placeholder images, not real photos.
+I used AI tools to help with implementation, testing, documentation and debugging, including library API differences (archiver 8, Express 5, sharp EXIF writing). The code is explained in the video walkthrough. The demo photos are generated placeholder images, not real photos.
 
 ## Project layout
 
