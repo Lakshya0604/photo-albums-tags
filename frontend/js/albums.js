@@ -53,7 +53,7 @@ export async function albumDetailView(root, id, back) {
       photos.length
         ? h('div', { class: 'grid' }, photos.map((p, i) => h('div', {},
           photoTile(p, { onOpen: () => openViewer(photos, i, viewerOptions()), isCover: p.id === album.coverPhotoId }),
-          h('div', { class: 'row', style: 'margin-top:4px' },
+          h('div', { class: 'tile-actions' },
             h('button', { onclick: act(() => api(`/api/albums/${id}`, { method: 'PATCH', body: { coverPhotoId: p.id } }), 'Cover set') }, 'Make cover'),
             h('button', { class: 'danger', onclick: act(() => api(`/api/albums/${id}/photos/${p.id}`, { method: 'DELETE' }), 'Removed from album') }, 'Remove')))))
         : h('div', { class: 'empty' }, 'No photos here yet. Select photos on the Photos tab and add them to this album.'));
