@@ -1,29 +1,22 @@
-const fs = require('fs');
-const path = require('path');
-const crypto = require('crypto');
+const { Readable } = require('stream');
+const { pipeline } = require('stream/promises');
 const images = require('./images');
 
-function dirs(config) {
-  const base = path.join(config.dataDir, 'uploads');
-  const originals = path.join(base, 'originals');
-  const thumbs = path.join(base, 'thumbs');
-  fs.mkdirSync(originals, { recursive: true });
-  fs.mkdirSync(thumbs, { recursive: true });
-  return { originals, thumbs };
+async function putBuffer(bucket, filename, buffer, contentType) {
+  const up = bucket.openUploadStream(filename, { contentType });
+  await pipeline(Readable.from([buffer]), up);
+  return up.id;
 }
 
-const EXT = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+async function totalStoredBytes(db) {
+  const r = await db.photos.aggregate([{ $group: { _id: null, bytes: { $sum: '$size' } } }]).toArray();
+  return r[0]?.bytes || 0;
+}
 
-// Saves the original, generates the server-side thumbnail, records the photo.
+// Saves the original and the server-made thumbnail to GridFS, then records the photo.
 async function savePhoto(db, config, userId, file) {
   const info = await images.inspect(file.buffer);
   if (!info) return { error: `${file.originalname}: not a valid JPEG, PNG or WebP image.` };
-
-  const id = crypto.randomBytes(12).toString('hex');
-  const storedName = `${id}.${EXT[info.mime]}`;
-  const thumbName = `${id}.jpg`;
-  const d = dirs(config);
-
   let thumb;
   try {
     thumb = await images.makeThumbnail(file.buffer);
@@ -32,82 +25,64 @@ async function savePhoto(db, config, userId, file) {
   }
   const takenAt = await images.readTakenAt(file.buffer);
   const uploadedAt = new Date().toISOString();
-  fs.writeFileSync(path.join(d.originals, storedName), file.buffer);
-  fs.writeFileSync(path.join(d.thumbs, thumbName), thumb);
-  let row;
+  const name = file.originalname.slice(0, 200);
+
+  let originalId;
+  let thumbId;
   try {
-    row = db
-    .prepare(
-      `INSERT INTO photos (user_id, original_name, stored_name, thumb_name, mime, size, width, height, taken_at, uploaded_at, sort_date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    )
-    .run(userId, file.originalname.slice(0, 200), storedName, thumbName, info.mime, file.size, info.width, info.height, takenAt, uploadedAt, takenAt || uploadedAt);
+    originalId = await putBuffer(db.originals, name, file.buffer, info.mime);
+    thumbId = await putBuffer(db.thumbs, name, thumb, 'image/jpeg');
+    const doc = {
+      userId, originalName: name, mime: info.mime, size: file.size, width: info.width, height: info.height,
+      takenAt, uploadedAt, sortDate: takenAt || uploadedAt, tags: [], originalId, thumbId,
+    };
+    const r = await db.photos.insertOne(doc);
+    return { id: r.insertedId };
   } catch (err) {
-    // do not leave orphan files when the database insert fails
-    removeFiles(config, { stored_name: storedName, thumb_name: thumbName });
+    // do not leave orphan blobs when a later step fails
+    await Promise.allSettled([originalId && db.originals.delete(originalId), thumbId && db.thumbs.delete(thumbId)]);
     throw err;
   }
-  return { id: Number(row.lastInsertRowid) };
 }
 
 function setTags(db, photoId, tags) {
-  const del = db.prepare('DELETE FROM photo_tags WHERE photo_id = ?');
-  const ins = db.prepare('INSERT INTO photo_tags (photo_id, tag) VALUES (?, ?)');
-  db.transaction(() => {
-    del.run(photoId);
-    for (const t of tags) ins.run(photoId, t);
-  })();
-}
-
-function attachTags(db, rows) {
-  if (!rows.length) return rows;
-  const ids = rows.map((r) => r.id);
-  const marks = ids.map(() => '?').join(',');
-  const tags = db.prepare(`SELECT photo_id, tag FROM photo_tags WHERE photo_id IN (${marks}) ORDER BY tag`).all(...ids);
-  const map = new Map();
-  for (const t of tags) {
-    if (!map.has(t.photo_id)) map.set(t.photo_id, []);
-    map.get(t.photo_id).push(t.tag);
-  }
-  return rows.map((r) => ({ ...r, tags: map.get(r.id) || [] }));
+  return db.photos.updateOne({ _id: photoId }, { $set: { tags: [...tags].sort() } });
 }
 
 function publicPhoto(r) {
   return {
-    id: r.id,
-    name: r.original_name,
+    id: r._id.toHexString(),
+    name: r.originalName,
     width: r.width,
     height: r.height,
-    takenAt: r.taken_at,
-    uploadedAt: r.uploaded_at,
-    dateSource: r.taken_at ? 'exif' : 'upload',
+    takenAt: r.takenAt,
+    uploadedAt: r.uploadedAt,
+    dateSource: r.takenAt ? 'exif' : 'upload',
     tags: r.tags || [],
   };
 }
 
-// Photos of one user, optionally filtered by tags (match=all|any), sorted by date taken.
-function listPhotos(db, userId, { tags = [], match = 'all', order = 'desc', albumId = null } = {}) {
-  const params = [userId];
-  let sql = 'SELECT p.* FROM photos p';
-  if (albumId) {
-    sql += ' JOIN album_photos ap ON ap.photo_id = p.id AND ap.album_id = ?';
-    params.unshift(albumId);
-  }
-  sql += ' WHERE p.user_id = ?';
-  if (tags.length) {
-    const marks = tags.map(() => '?').join(',');
-    const need = match === 'any' ? 1 : tags.length;
-    sql += ` AND (SELECT COUNT(DISTINCT tag) FROM photo_tags t WHERE t.photo_id = p.id AND t.tag IN (${marks})) >= ?`;
-    params.push(...tags, need);
-  }
-  sql += ` ORDER BY p.sort_date ${order === 'asc' ? 'ASC' : 'DESC'}, p.id ${order === 'asc' ? 'ASC' : 'DESC'}`;
-  return attachTags(db, db.prepare(sql).all(...params)).map(publicPhoto);
+// Photos of one user, optionally filtered by tags (match=all|any), sorted by date taken
+// (EXIF) with upload date as the fallback (sortDate holds whichever applies).
+async function listPhotos(db, userId, { tags = [], match = 'all', order = 'desc', photoIds = null } = {}) {
+  const filter = { userId };
+  if (photoIds) filter._id = { $in: photoIds };
+  if (tags.length) filter.tags = match === 'any' ? { $in: tags } : { $all: tags };
+  const dir = order === 'asc' ? 1 : -1;
+  const rows = await db.photos.find(filter).sort({ sortDate: dir, _id: dir }).toArray();
+  return rows.map(publicPhoto);
 }
 
-function removeFiles(config, row) {
-  const d = dirs(config);
-  fs.rmSync(path.join(d.originals, row.stored_name), { force: true });
-  fs.rmSync(path.join(d.thumbs, row.thumb_name), { force: true });
+async function removeBlobs(db, row) {
+  await Promise.allSettled([db.originals.delete(row.originalId), db.thumbs.delete(row.thumbId)]);
 }
 
-module.exports = { savePhoto, setTags, listPhotos, attachTags, publicPhoto, removeFiles, dirs };
+// Streams a GridFS file to the response; ends the request cleanly if the blob is gone.
+function sendBlob(bucket, id, res, contentType) {
+  res.type(contentType);
+  const stream = bucket.openDownloadStream(id);
+  stream.on('error', () => { if (!res.headersSent) res.status(404).json({ error: 'File not found.' }); else res.destroy(); });
+  stream.pipe(res);
+}
+
+module.exports = { savePhoto, setTags, listPhotos, publicPhoto, removeBlobs, sendBlob, totalStoredBytes };

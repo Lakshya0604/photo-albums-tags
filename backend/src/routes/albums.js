@@ -5,116 +5,112 @@ const path = require('path');
 const store = require('../photoStore');
 const { HttpError, validateName, parseId, parseIdList, normalizeTags } = require('../validate');
 
-function albumsRouter(db, config) {
+function albumsRouter(db) {
   const router = express.Router();
 
-  function ownAlbum(req) {
-    const row = db.prepare('SELECT * FROM albums WHERE id = ? AND user_id = ?').get(parseId(req.params.id, 'album id'), req.user.id);
+  async function ownAlbum(req) {
+    const row = await db.albums.findOne({ _id: parseId(req.params.id, 'album id'), userId: req.user.id });
     if (!row) throw new HttpError(404, 'Album not found.');
     return row;
   }
 
-  const albumJson = (a) => ({
-    id: a.id,
-    name: a.name,
-    coverPhotoId: a.cover_photo_id,
-    shared: !!a.share_token,
-    shareToken: a.share_token || null,
-    photoCount: db.prepare('SELECT COUNT(*) c FROM album_photos WHERE album_id = ?').get(a.id).c,
-  });
-
-  // Cover falls back to the first photo of the album when none is chosen.
-  function withCover(a) {
-    const j = albumJson(a);
-    if (!j.coverPhotoId) {
-      const first = db.prepare(
-        'SELECT p.id FROM album_photos ap JOIN photos p ON p.id = ap.photo_id WHERE ap.album_id = ? ORDER BY p.sort_date DESC LIMIT 1'
-      ).get(a.id);
-      j.coverPhotoId = first?.id ?? null;
+  // Cover falls back to the newest photo of the album when none is chosen.
+  async function albumJson(a) {
+    let cover = a.coverPhotoId;
+    if (!cover && a.photoIds.length) {
+      const first = await db.photos.find({ _id: { $in: a.photoIds } }).sort({ sortDate: -1 }).limit(1).next();
+      cover = first?._id || null;
     }
-    return j;
+    return {
+      id: a._id.toHexString(),
+      name: a.name,
+      coverPhotoId: cover ? cover.toHexString() : null,
+      shared: !!a.shareToken,
+      shareToken: a.shareToken || null,
+      photoCount: a.photoIds.length,
+    };
   }
 
-  router.get('/', (req, res) => {
-    const rows = db.prepare('SELECT * FROM albums WHERE user_id = ? ORDER BY id DESC').all(req.user.id);
-    res.json({ albums: rows.map(withCover) });
+  const fresh = (id) => db.albums.findOne({ _id: id });
+
+  router.get('/', async (req, res) => {
+    const rows = await db.albums.find({ userId: req.user.id }).sort({ _id: -1 }).toArray();
+    res.json({ albums: await Promise.all(rows.map(albumJson)) });
   });
 
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     const name = validateName(req.body?.name, 'Album name');
-    const info = db.prepare('INSERT INTO albums (user_id, name) VALUES (?, ?)').run(req.user.id, name);
-    res.status(201).json({ album: withCover(db.prepare('SELECT * FROM albums WHERE id = ?').get(info.lastInsertRowid)) });
+    const doc = { userId: req.user.id, name, coverPhotoId: null, photoIds: [], createdAt: new Date() };
+    const r = await db.albums.insertOne(doc);
+    res.status(201).json({ album: await albumJson({ ...doc, _id: r.insertedId }) });
   });
 
-  router.get('/:id', (req, res) => {
-    const album = ownAlbum(req);
+  router.get('/:id', async (req, res) => {
+    const album = await ownAlbum(req);
     const tags = req.query.tags ? normalizeTags(String(req.query.tags)) : [];
-    const photos = store.listPhotos(db, req.user.id, {
-      albumId: album.id, tags, match: req.query.match === 'any' ? 'any' : 'all', order: req.query.order === 'asc' ? 'asc' : 'desc',
+    const photos = await store.listPhotos(db, req.user.id, {
+      photoIds: album.photoIds, tags, match: req.query.match === 'any' ? 'any' : 'all', order: req.query.order === 'asc' ? 'asc' : 'desc',
     });
-    res.json({ album: withCover(album), photos });
+    res.json({ album: await albumJson(album), photos });
   });
 
-  router.patch('/:id', (req, res) => {
-    const album = ownAlbum(req);
+  router.patch('/:id', async (req, res) => {
+    const album = await ownAlbum(req);
     const body = req.body || {};
     if (body.name === undefined && body.coverPhotoId === undefined) throw new HttpError(400, 'Nothing to update.');
-    if (body.name !== undefined) {
-      db.prepare('UPDATE albums SET name = ? WHERE id = ?').run(validateName(body.name, 'Album name'), album.id);
-    }
+    const set = {};
+    if (body.name !== undefined) set.name = validateName(body.name, 'Album name');
     if (body.coverPhotoId !== undefined) {
       const coverId = body.coverPhotoId === null ? null : parseId(body.coverPhotoId, 'cover photo id');
-      if (coverId && !db.prepare('SELECT 1 FROM album_photos WHERE album_id = ? AND photo_id = ?').get(album.id, coverId)) {
+      if (coverId && !album.photoIds.some((p) => p.equals(coverId))) {
         throw new HttpError(400, 'The cover must be a photo that is in this album.');
       }
-      db.prepare('UPDATE albums SET cover_photo_id = ? WHERE id = ?').run(coverId, album.id);
+      set.coverPhotoId = coverId;
     }
-    res.json({ album: withCover(db.prepare('SELECT * FROM albums WHERE id = ?').get(album.id)) });
+    await db.albums.updateOne({ _id: album._id }, { $set: set });
+    res.json({ album: await albumJson(await fresh(album._id)) });
   });
 
-  router.delete('/:id', (req, res) => {
-    const album = ownAlbum(req);
-    db.prepare('DELETE FROM albums WHERE id = ?').run(album.id);
+  router.delete('/:id', async (req, res) => {
+    const album = await ownAlbum(req);
+    await db.albums.deleteOne({ _id: album._id });
     res.json({ ok: true });
   });
 
-  router.post('/:id/photos', (req, res) => {
-    const album = ownAlbum(req);
+  router.post('/:id/photos', async (req, res) => {
+    const album = await ownAlbum(req);
     const ids = parseIdList(req.body?.photoIds);
-    const owned = db.prepare(`SELECT id FROM photos WHERE user_id = ? AND id IN (${ids.map(() => '?').join(',')})`).all(req.user.id, ...ids);
-    if (owned.length !== ids.length) throw new HttpError(400, 'One or more photos were not found.');
-    const ins = db.prepare('INSERT OR IGNORE INTO album_photos (album_id, photo_id) VALUES (?, ?)');
-    db.transaction(() => ids.forEach((id) => ins.run(album.id, id)))();
-    res.json({ album: withCover(album) });
+    const owned = await db.photos.countDocuments({ userId: req.user.id, _id: { $in: ids } });
+    if (owned !== ids.length) throw new HttpError(400, 'One or more photos were not found.');
+    await db.albums.updateOne({ _id: album._id }, { $addToSet: { photoIds: { $each: ids } } });
+    res.json({ album: await albumJson(await fresh(album._id)) });
   });
 
-  router.delete('/:id/photos/:photoId', (req, res) => {
-    const album = ownAlbum(req);
+  router.delete('/:id/photos/:photoId', async (req, res) => {
+    const album = await ownAlbum(req);
     const photoId = parseId(req.params.photoId, 'photo id');
-    db.prepare('DELETE FROM album_photos WHERE album_id = ? AND photo_id = ?').run(album.id, photoId);
-    if (album.cover_photo_id === photoId) db.prepare('UPDATE albums SET cover_photo_id = NULL WHERE id = ?').run(album.id);
+    await db.albums.updateOne({ _id: album._id }, { $pull: { photoIds: photoId } });
+    if (album.coverPhotoId?.equals(photoId)) await db.albums.updateOne({ _id: album._id }, { $set: { coverPhotoId: null } });
     res.json({ ok: true });
   });
 
   // Public sharing: a random token. Removing it makes every public URL fail on the next request.
-  router.post('/:id/share', (req, res) => {
-    const album = ownAlbum(req);
-    const token = album.share_token || crypto.randomBytes(18).toString('base64url');
-    db.prepare('UPDATE albums SET share_token = ? WHERE id = ?').run(token, album.id);
+  router.post('/:id/share', async (req, res) => {
+    const album = await ownAlbum(req);
+    const token = album.shareToken || crypto.randomBytes(18).toString('base64url');
+    await db.albums.updateOne({ _id: album._id }, { $set: { shareToken: token } });
     res.json({ shareToken: token, sharePath: `/s/${token}` });
   });
 
-  router.delete('/:id/share', (req, res) => {
-    const album = ownAlbum(req);
-    db.prepare('UPDATE albums SET share_token = NULL WHERE id = ?').run(album.id);
+  router.delete('/:id/share', async (req, res) => {
+    const album = await ownAlbum(req);
+    await db.albums.updateOne({ _id: album._id }, { $unset: { shareToken: '' } });
     res.json({ ok: true });
   });
 
-  router.get('/:id/zip', (req, res) => {
-    const album = ownAlbum(req);
-    const rows = db.prepare(
-      'SELECT p.* FROM album_photos ap JOIN photos p ON p.id = ap.photo_id WHERE ap.album_id = ? ORDER BY p.sort_date'
-    ).all(album.id);
+  router.get('/:id/zip', async (req, res) => {
+    const album = await ownAlbum(req);
+    const rows = await db.photos.find({ _id: { $in: album.photoIds } }).sort({ sortDate: 1 }).toArray();
     const safe = album.name.replace(/[^\p{L}\p{N}_-]+/gu, '_') || 'album';
     res.attachment(`${safe}.zip`);
     const zip = new ZipArchive({ store: true });
@@ -122,12 +118,12 @@ function albumsRouter(db, config) {
     zip.pipe(res);
     const used = new Set();
     for (const r of rows) {
-      let name = path.basename(r.original_name).replace(/[\\/]/g, '_') || r.stored_name;
-      while (used.has(name)) name = `${r.id}-${name}`;
+      let name = path.basename(r.originalName).replace(/[\\/]/g, '_') || r._id.toHexString();
+      while (used.has(name)) name = `${r._id.toHexString().slice(-6)}-${name}`;
       used.add(name);
-      zip.file(path.join(store.dirs(config).originals, r.stored_name), { name });
+      zip.append(db.originals.openDownloadStream(r.originalId), { name });
     }
-    zip.finalize();
+    await zip.finalize();
   });
 
   return router;

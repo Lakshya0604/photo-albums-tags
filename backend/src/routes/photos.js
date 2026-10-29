@@ -1,6 +1,5 @@
 const express = require('express');
 const multer = require('multer');
-const path = require('path');
 const store = require('../photoStore');
 const { HttpError, normalizeTags, parseId } = require('../validate');
 
@@ -11,17 +10,17 @@ function photosRouter(db, config) {
     limits: { fileSize: config.maxUploadMb * 1024 * 1024, files: config.maxFiles, fields: 5, fieldSize: 2048, parts: config.maxFiles + 5 },
   });
 
-  function ownPhoto(req) {
-    const row = db.prepare('SELECT * FROM photos WHERE id = ? AND user_id = ?').get(parseId(req.params.id, 'photo id'), req.user.id);
+  async function ownPhoto(req) {
+    const row = await db.photos.findOne({ _id: parseId(req.params.id, 'photo id'), userId: req.user.id });
     if (!row) throw new HttpError(404, 'Photo not found.');
     return row;
   }
 
-  router.get('/', (req, res) => {
+  router.get('/', async (req, res) => {
     const tags = req.query.tags ? normalizeTags(String(req.query.tags)) : [];
     const match = req.query.match === 'any' ? 'any' : 'all';
     const order = req.query.order === 'asc' ? 'asc' : 'desc';
-    res.json({ photos: store.listPhotos(db, req.user.id, { tags, match, order }) });
+    res.json({ photos: await store.listPhotos(db, req.user.id, { tags, match, order }) });
   });
 
   router.post('/', (req, res, next) => {
@@ -37,43 +36,51 @@ function photosRouter(db, config) {
   }, async (req, res) => {
     if (!req.files?.length) throw new HttpError(400, 'Choose at least one photo to upload.');
     const tags = req.body.tags ? normalizeTags(String(req.body.tags)) : [];
+    const incoming = req.files.reduce((n, f) => n + f.size, 0);
+    if ((await store.totalStoredBytes(db)) + incoming > config.maxTotalMb * 1024 * 1024) {
+      throw new HttpError(507, 'The demo storage is full. Delete some photos and try again.');
+    }
     const created = [];
     const errors = [];
     for (const file of req.files) {
       const result = await store.savePhoto(db, config, req.user.id, file);
       if (result.error) { errors.push(result.error); continue; }
-      if (tags.length) store.setTags(db, result.id, tags);
+      if (tags.length) await store.setTags(db, result.id, tags);
       created.push(result.id);
     }
     if (!created.length) throw new HttpError(400, errors.join(' '));
-    const photos = store.listPhotos(db, req.user.id).filter((p) => created.includes(p.id));
+    const photos = await store.listPhotos(db, req.user.id, { photoIds: created });
     res.status(201).json({ photos, errors });
   });
 
-  router.put('/:id/tags', (req, res) => {
-    const row = ownPhoto(req);
+  router.put('/:id/tags', async (req, res) => {
+    const row = await ownPhoto(req);
     if (!Array.isArray(req.body?.tags)) throw new HttpError(400, 'Tags must be a list.');
-    store.setTags(db, row.id, normalizeTags(req.body.tags));
-    res.json({ photo: store.listPhotos(db, req.user.id).find((p) => p.id === row.id) });
+    await store.setTags(db, row._id, normalizeTags(req.body.tags));
+    const [photo] = await store.listPhotos(db, req.user.id, { photoIds: [row._id] });
+    res.json({ photo });
   });
 
-  router.delete('/:id', (req, res) => {
-    const row = ownPhoto(req);
-    db.prepare('DELETE FROM photos WHERE id = ?').run(row.id);
-    store.removeFiles(config, row);
+  router.delete('/:id', async (req, res) => {
+    const row = await ownPhoto(req);
+    await db.photos.deleteOne({ _id: row._id });
+    // a deleted photo also leaves every album and stops being a cover
+    await db.albums.updateMany({ photoIds: row._id }, { $pull: { photoIds: row._id } });
+    await db.albums.updateMany({ coverPhotoId: row._id }, { $set: { coverPhotoId: null } });
+    await store.removeBlobs(db, row);
     res.json({ ok: true });
   });
 
-  router.get('/:id/thumb', (req, res) => {
-    const row = ownPhoto(req);
-    res.set('Cache-Control', 'private, max-age=3600').type('image/jpeg')
-      .sendFile(path.join(store.dirs(config).thumbs, row.thumb_name));
+  router.get('/:id/thumb', async (req, res) => {
+    const row = await ownPhoto(req);
+    res.set('Cache-Control', 'private, max-age=3600');
+    store.sendBlob(db.thumbs, row.thumbId, res, 'image/jpeg');
   });
 
-  router.get('/:id/file', (req, res) => {
-    const row = ownPhoto(req);
-    res.set('Cache-Control', 'private, max-age=3600').type(row.mime)
-      .sendFile(path.join(store.dirs(config).originals, row.stored_name));
+  router.get('/:id/file', async (req, res) => {
+    const row = await ownPhoto(req);
+    res.set('Cache-Control', 'private, max-age=3600');
+    store.sendBlob(db.originals, row.originalId, res, row.mime);
   });
 
   return router;
