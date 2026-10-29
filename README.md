@@ -79,7 +79,7 @@ Not done, and what I would do with more time:
 
 ## AI tools used
 
-AI coding assistance was used for scaffolding the project, writing the first version of the backend, frontend and tests, writing this README, and debugging library API differences (archiver 8, Express 5, sharp EXIF writing). I reviewed the code and can explain every part of it in the video. The demo photos are generated placeholder images, not real photos.
+AI coding assistance was used for scaffolding the project, writing the first version of the backend, frontend and tests, writing this README, and debugging library API differences (archiver 8, Express 5, sharp EXIF writing). The code is explained in the video walkthrough. The demo photos are generated placeholder images, not real photos.
 
 ## Project layout
 
