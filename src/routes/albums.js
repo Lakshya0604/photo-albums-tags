@@ -1,6 +1,6 @@
 const express = require('express');
 const crypto = require('crypto');
-const archiver = require('archiver');
+const { ZipArchive } = require('archiver');
 const path = require('path');
 const store = require('../photoStore');
 const { HttpError, validateName, parseId, parseIdList, normalizeTags } = require('../validate');
@@ -117,7 +117,7 @@ function albumsRouter(db, config) {
     ).all(album.id);
     const safe = album.name.replace(/[^\p{L}\p{N}_-]+/gu, '_') || 'album';
     res.attachment(`${safe}.zip`);
-    const zip = archiver('zip', { store: true });
+    const zip = new ZipArchive({ store: true });
     zip.on('error', () => res.destroy());
     zip.pipe(res);
     const used = new Set();

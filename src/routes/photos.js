@@ -52,7 +52,8 @@ function photosRouter(db, config) {
 
   router.put('/:id/tags', (req, res) => {
     const row = ownPhoto(req);
-    store.setTags(db, row.id, normalizeTags(req.body?.tags));
+    if (!Array.isArray(req.body?.tags)) throw new HttpError(400, 'Tags must be a list.');
+    store.setTags(db, row.id, normalizeTags(req.body.tags));
     res.json({ photo: store.listPhotos(db, req.user.id).find((p) => p.id === row.id) });
   });
 
