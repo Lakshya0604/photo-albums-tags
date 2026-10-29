@@ -4,6 +4,15 @@ A full-stack photo album app. Upload many photos at once, the server makes thumb
 
 Stack: Node.js 20+, Express 5, MongoDB (images in GridFS), sharp (thumbnails), exifr (EXIF dates), archiver (ZIP), plain JavaScript modules on the frontend (no build step).
 
+## Live demo
+
+https://photo-albums-tags.onrender.com
+
+- Demo login: `demo@example.com` / `demo12345`
+- Public share link of the demo album: https://photo-albums-tags.onrender.com/s/demo-shared-album-token-0001
+- Hosted on free tiers (Render free web service, MongoDB Atlas free 512 MB). The server sleeps when idle, so the first request after a pause can take about a minute. Uploads are capped at 350 MB in total to stay inside the free database.
+- Anyone can register, so please keep uploads small and do not store private photos on the demo.
+
 ## Run it
 
 Needs Node.js 20 or newer and a MongoDB database (a free MongoDB Atlas cluster works, or a local `mongod`).
