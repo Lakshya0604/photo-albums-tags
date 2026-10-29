@@ -1,63 +1,35 @@
-const Database = require('better-sqlite3');
-const fs = require('fs');
-const path = require('path');
+const { MongoClient, GridFSBucket } = require('mongodb');
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
-  email TEXT NOT NULL UNIQUE,
-  password_hash TEXT NOT NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS sessions (
-  token TEXT PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS photos (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  original_name TEXT NOT NULL,
-  stored_name TEXT NOT NULL,
-  thumb_name TEXT NOT NULL,
-  mime TEXT NOT NULL,
-  size INTEGER NOT NULL,
-  width INTEGER,
-  height INTEGER,
-  taken_at TEXT,
-  uploaded_at TEXT NOT NULL,
-  sort_date TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_photos_user_sort ON photos(user_id, sort_date);
-CREATE TABLE IF NOT EXISTS photo_tags (
-  photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
-  tag TEXT NOT NULL,
-  PRIMARY KEY (photo_id, tag)
-);
-CREATE INDEX IF NOT EXISTS idx_tags_tag ON photo_tags(tag);
-CREATE TABLE IF NOT EXISTS albums (
-  id INTEGER PRIMARY KEY,
-  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  name TEXT NOT NULL,
-  cover_photo_id INTEGER REFERENCES photos(id) ON DELETE SET NULL,
-  share_token TEXT UNIQUE,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-CREATE TABLE IF NOT EXISTS album_photos (
-  album_id INTEGER NOT NULL REFERENCES albums(id) ON DELETE CASCADE,
-  photo_id INTEGER NOT NULL REFERENCES photos(id) ON DELETE CASCADE,
-  added_at TEXT NOT NULL DEFAULT (datetime('now')),
-  PRIMARY KEY (album_id, photo_id)
-);
-`;
-
-function openDb(dataDir) {
-  fs.mkdirSync(dataDir, { recursive: true });
-  const file = dataDir === ':memory:' ? ':memory:' : path.join(dataDir, 'app.db');
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
-  db.exec(SCHEMA);
-  return db;
+// Collections:
+//   users    { _id, email (unique), passwordHash, createdAt }
+//   sessions { _id: token, userId, createdAt }  (TTL index removes expired sessions)
+//   photos   { _id, userId, originalName, mime, size, width, height, takenAt, uploadedAt,
+//              sortDate, tags[], originalId, thumbId }
+//   albums   { _id, userId, name, coverPhotoId, shareToken (unique, sparse), photoIds[], createdAt }
+// Image bytes live in GridFS: bucket "originals" and bucket "thumbs".
+async function openDb(uri, dbName) {
+  const client = new MongoClient(uri, { serverSelectionTimeoutMS: 15000 });
+  await client.connect();
+  const db = client.db(dbName);
+  const cols = {
+    users: db.collection('users'),
+    sessions: db.collection('sessions'),
+    photos: db.collection('photos'),
+    albums: db.collection('albums'),
+  };
+  await cols.users.createIndex({ email: 1 }, { unique: true });
+  await cols.sessions.createIndex({ createdAt: 1 }, { expireAfterSeconds: 7 * 24 * 3600 });
+  await cols.photos.createIndex({ userId: 1, sortDate: -1 });
+  await cols.photos.createIndex({ userId: 1, tags: 1 });
+  await cols.albums.createIndex({ userId: 1 });
+  await cols.albums.createIndex({ shareToken: 1 }, { unique: true, sparse: true });
+  return {
+    client,
+    db,
+    ...cols,
+    originals: new GridFSBucket(db, { bucketName: 'originals' }),
+    thumbs: new GridFSBucket(db, { bucketName: 'thumbs' }),
+    close: () => client.close(),
+  };
 }
 module.exports = { openDb };

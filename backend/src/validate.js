@@ -1,3 +1,5 @@
+const { ObjectId } = require('mongodb');
+
 class HttpError extends Error {
   constructor(status, message) {
     super(message);
@@ -44,17 +46,19 @@ function normalizeTags(input) {
   return [...out];
 }
 
+// Ids are MongoDB ObjectIds sent as 24-character hex strings.
 function parseId(value, label = 'id') {
-  const n = Number(value);
-  if (!Number.isInteger(n) || n <= 0) throw new HttpError(400, `Invalid ${label}.`);
-  return n;
+  if (typeof value !== 'string' || !/^[a-f0-9]{24}$/i.test(value)) throw new HttpError(400, `Invalid ${label}.`);
+  return new ObjectId(value);
 }
 
 function parseIdList(value, label = 'photoIds') {
   if (!Array.isArray(value) || value.length === 0 || value.length > 200) {
     throw new HttpError(400, `${label} must be a list of 1 to 200 ids.`);
   }
-  return [...new Set(value.map((v) => parseId(v, label)))];
+  const seen = new Map();
+  for (const v of value) { const id = parseId(v, label); seen.set(id.toHexString(), id); }
+  return [...seen.values()];
 }
 
 module.exports = { HttpError, validateCredentials, validateName, normalizeTags, parseId, parseIdList };
