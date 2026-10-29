@@ -1,12 +1,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('fs');
-const path = require('path');
 const sharp = require('sharp');
 const { newApp, signup, upload, makeJpeg } = require('./helpers');
 
 test('upload creates a server-side thumbnail much smaller than the original', async () => {
-  const { agent, config } = newApp();
+  const { agent, db } = await newApp();
   await signup(agent);
   const big = await makeJpeg({ width: 3000, height: 2000, seed: 2 });
   const res = await upload(agent, [{ buffer: big }]).expect(201);
@@ -15,13 +13,13 @@ test('upload creates a server-side thumbnail much smaller than the original', as
   const thumbRes = await agent.get(`/api/photos/${id}/thumb`).expect(200);
   const meta = await sharp(thumbRes.body).metadata();
   assert.ok(meta.width <= 320 && meta.height <= 320, 'thumbnail is at most 320px');
-  const thumbFiles = fs.readdirSync(path.join(config.dataDir, 'uploads', 'thumbs'));
-  assert.equal(thumbFiles.length, 1);
+  assert.equal((await db.thumbs.find().toArray()).length, 1, 'thumbnail is stored in the database');
+  assert.equal((await db.originals.find().toArray()).length, 1);
   assert.ok(thumbRes.body.length < big.length / 5, 'thumbnail is far smaller than the original');
 });
 
 test('uploading several photos at once works, and invalid files are rejected with a clear error', async () => {
-  const { agent } = newApp();
+  const { agent } = await newApp();
   await signup(agent);
   const a = await makeJpeg({ seed: 2 });
   const b = await makeJpeg({ seed: 2 });
@@ -38,7 +36,7 @@ test('uploading several photos at once works, and invalid files are rejected wit
 });
 
 test('photos sort by EXIF date taken and fall back to the upload date', async () => {
-  const { agent } = newApp();
+  const { agent } = await newApp();
   await signup(agent);
   const old = await makeJpeg({ seed: 2, takenAt: '2019:01:02 10:00:00' });
   const mid = await makeJpeg({ seed: 2, takenAt: '2021:06:07 10:00:00' });
@@ -54,11 +52,11 @@ test('photos sort by EXIF date taken and fall back to the upload date', async ()
 });
 
 test('tag search matches all tags by default and any tag on request; tags are validated', async () => {
-  const { agent } = newApp();
+  const { agent } = await newApp();
   await signup(agent);
   const img = await makeJpeg();
   const r = await upload(agent, [{ buffer: img, name: 'one.jpg' }, { buffer: img, name: 'two.jpg' }]).expect(201);
-  const [p1, p2] = r.body.photos.map((p) => p.id).sort((x, y) => x - y);
+  const [p1, p2] = r.body.photos.map((p) => p.id);
   await agent.put(`/api/photos/${p1}/tags`).send({ tags: ['Beach', ' summer ', 'beach'] }).expect(200);
   await agent.put(`/api/photos/${p2}/tags`).send({ tags: ['beach'] }).expect(200);
 
@@ -75,7 +73,7 @@ test('tag search matches all tags by default and any tag on request; tags are va
 });
 
 test('users cannot see or change each other\'s photos', async () => {
-  const { agent, request, newAgent } = newApp();
+  const { agent, request, newAgent } = await newApp();
   await signup(agent, 'owner@example.com');
   const r = await upload(agent, [{ buffer: await makeJpeg() }]).expect(201);
   const id = r.body.photos[0].id;
@@ -86,4 +84,31 @@ test('users cannot see or change each other\'s photos', async () => {
   await other.delete(`/api/photos/${id}`).expect(404);
   assert.equal((await other.get('/api/photos')).body.photos.length, 0);
   await request().get('/api/photos').expect(401);
+});
+
+test('deleting a photo removes it from albums and deletes its stored files', async () => {
+  const { agent, db } = await newApp();
+  await signup(agent);
+  const img = await makeJpeg();
+  const r = await upload(agent, [{ buffer: img, name: 'a.jpg' }, { buffer: img, name: 'b.jpg' }]).expect(201);
+  const [a, b] = r.body.photos.map((p) => p.id);
+  const album = (await agent.post('/api/albums').send({ name: 'X' })).body.album;
+  await agent.post(`/api/albums/${album.id}/photos`).send({ photoIds: [a, b] }).expect(200);
+  await agent.patch(`/api/albums/${album.id}`).send({ coverPhotoId: a }).expect(200);
+
+  await agent.delete(`/api/photos/${a}`).expect(200);
+  const detail = (await agent.get(`/api/albums/${album.id}`)).body;
+  assert.equal(detail.photos.length, 1);
+  assert.notEqual(detail.album.coverPhotoId, a);
+  assert.equal((await db.originals.find().toArray()).length, 1);
+  assert.equal((await db.thumbs.find().toArray()).length, 1);
+  await agent.get(`/api/photos/${a}/thumb`).expect(404);
+  await agent.get('/api/photos/not-an-id/thumb').expect(400);
+});
+
+test('uploads stop with a clear error when the total storage cap is reached', async () => {
+  const { agent } = await newApp({ maxTotalMb: 0.01 });
+  await signup(agent);
+  const res = await upload(agent, [{ buffer: await makeJpeg({ width: 1200, height: 800, seed: 3 }) }]).expect(507);
+  assert.match(res.body.error, /storage is full/);
 });

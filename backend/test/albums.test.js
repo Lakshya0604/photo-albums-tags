@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { newApp, signup, upload, makeJpeg } = require('./helpers');
 
 async function setup() {
-  const ctx = newApp();
+  const ctx = await newApp();
   await signup(ctx.agent);
   const img = await makeJpeg();
   const r = await upload(ctx.agent, [{ buffer: img, name: 'a.jpg' }, { buffer: img, name: 'b.jpg' }, { buffer: img, name: 'c.jpg' }]).expect(201);
@@ -19,7 +19,7 @@ test('album create, rename, add/remove photos and choose cover', async () => {
 
   await agent.patch(`/api/albums/${album.id}`).send({ name: 'Trip 2024' }).expect(200);
   await agent.post(`/api/albums/${album.id}/photos`).send({ photoIds: [ids[0], ids[1]] }).expect(200);
-  await agent.post(`/api/albums/${album.id}/photos`).send({ photoIds: [999999] }).expect(400);
+  await agent.post(`/api/albums/${album.id}/photos`).send({ photoIds: ['0123456789abcdef01234567'] }).expect(400);
 
   let detail = (await agent.get(`/api/albums/${album.id}`)).body;
   assert.equal(detail.album.name, 'Trip 2024');

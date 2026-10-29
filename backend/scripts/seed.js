@@ -24,29 +24,31 @@ const PHOTOS = [
   ['no-exif-date', 'forest', null, ['demo']],
 ];
 
-async function seed(config = loadConfig()) {
-  const db = openDb(config.dataDir);
-  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(DEMO.email)) {
-    console.log('Demo data already exists. Delete the data folder to reseed.');
-    return;
+async function seed(config = loadConfig(), existing = null) {
+  const db = existing || (await openDb(config.mongoUri, config.mongoDb));
+  try {
+    if (await db.users.findOne({ email: DEMO.email })) {
+      console.log('Demo data already exists. Drop the database to reseed.');
+      return;
+    }
+    const userId = (await db.users.insertOne({ email: DEMO.email, passwordHash: await bcrypt.hash(DEMO.password, 10), createdAt: new Date() })).insertedId;
+    const ids = [];
+    for (const [i, [name, palette, takenAt, tags]] of PHOTOS.entries()) {
+      const buffer = await makeJpeg({ palette, takenAt, seed: i + 1 });
+      const res = await store.savePhoto(db, config, userId, { buffer, size: buffer.length, originalname: `${name}.jpg` });
+      await store.setTags(db, res.id, tags);
+      ids.push(res.id);
+    }
+    const mkAlbum = (name, photoIds, shareToken) => db.albums.insertOne({
+      userId, name, coverPhotoId: photoIds[0], photoIds, createdAt: new Date(), ...(shareToken ? { shareToken } : {}),
+    });
+    await mkAlbum('Summer 2024', [ids[0], ids[1], ids[6], ids[7]], SHARE_TOKEN);
+    await mkAlbum('Mountains', [ids[2], ids[3], ids[9]], null);
+    console.log(`Seeded. Log in with ${DEMO.email} / ${DEMO.password}`);
+    console.log(`Public demo album link: /s/${SHARE_TOKEN}`);
+  } finally {
+    if (!existing) await db.close();
   }
-  const user = db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run(DEMO.email, bcrypt.hashSync(DEMO.password, 10));
-  const userId = Number(user.lastInsertRowid);
-  const ids = [];
-  for (const [[name, palette, takenAt, tags], i] of PHOTOS.map((row, i) => [row, i])) {
-    const buffer = await makeJpeg({ palette, takenAt, seed: i + 1 });
-    const res = await store.savePhoto(db, config, userId, { buffer, size: buffer.length, originalname: `${name}.jpg` });
-    store.setTags(db, res.id, tags);
-    ids.push(res.id);
-  }
-  const mkAlbum = (name, photoIds, token) => {
-    const a = db.prepare('INSERT INTO albums (user_id, name, cover_photo_id, share_token) VALUES (?, ?, ?, ?)').run(userId, name, photoIds[0], token);
-    for (const p of photoIds) db.prepare('INSERT INTO album_photos (album_id, photo_id) VALUES (?, ?)').run(a.lastInsertRowid, p);
-  };
-  mkAlbum('Summer 2024', [ids[0], ids[1], ids[6], ids[7]], SHARE_TOKEN);
-  mkAlbum('Mountains', [ids[2], ids[3], ids[9]], null);
-  console.log(`Seeded. Log in with ${DEMO.email} / ${DEMO.password}`);
-  console.log(`Public demo album link: /s/${SHARE_TOKEN}`);
 }
 
 if (require.main === module) seed().catch((e) => { console.error(e); process.exit(1); });

@@ -1,13 +1,28 @@
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
+const crypto = require('crypto');
 const request = require('supertest');
+const { after } = require('node:test');
+const { MongoMemoryServer } = require('mongodb-memory-server');
 const { createApp } = require('../src/app');
 const { makeJpeg } = require('../src/sampleImage');
 
-function newApp() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'photo-albums-test-'));
-  const ctx = createApp({ dataDir, maxUploadMb: 1, maxFiles: 5 });
+// One in-memory MongoDB per test file; every app gets its own database.
+let server;
+const apps = [];
+async function mongoUri() {
+  server ||= await MongoMemoryServer.create();
+  return server.getUri();
+}
+after(async () => {
+  await Promise.all(apps.map((db) => db.close()));
+  if (server) await server.stop();
+});
+
+async function newApp(overrides = {}) {
+  const mongoUri_ = await mongoUri();
+  const ctx = await createApp({
+    mongoUri: mongoUri_, mongoDb: `t_${crypto.randomBytes(6).toString('hex')}`, maxUploadMb: 1, maxFiles: 5, ...overrides,
+  });
+  apps.push(ctx.db);
   return { ...ctx, agent: request.agent(ctx.app), newAgent: () => request.agent(ctx.app), request: () => request(ctx.app) };
 }
 
