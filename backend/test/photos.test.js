@@ -8,7 +8,7 @@ const { newApp, signup, upload, makeJpeg } = require('./helpers');
 test('upload creates a server-side thumbnail much smaller than the original', async () => {
   const { agent, config } = newApp();
   await signup(agent);
-  const big = await makeJpeg({ width: 3000, height: 2000, label: 'big' });
+  const big = await makeJpeg({ width: 3000, height: 2000, seed: 2 });
   const res = await upload(agent, [{ buffer: big }]).expect(201);
   const id = res.body.photos[0].id;
 
@@ -23,8 +23,8 @@ test('upload creates a server-side thumbnail much smaller than the original', as
 test('uploading several photos at once works, and invalid files are rejected with a clear error', async () => {
   const { agent } = newApp();
   await signup(agent);
-  const a = await makeJpeg({ label: 'a' });
-  const b = await makeJpeg({ label: 'b' });
+  const a = await makeJpeg({ seed: 2 });
+  const b = await makeJpeg({ seed: 2 });
   const ok = await upload(agent, [{ buffer: a }, { buffer: b }]).expect(201);
   assert.equal(ok.body.photos.length, 2);
 
@@ -40,9 +40,9 @@ test('uploading several photos at once works, and invalid files are rejected wit
 test('photos sort by EXIF date taken and fall back to the upload date', async () => {
   const { agent } = newApp();
   await signup(agent);
-  const old = await makeJpeg({ label: 'old', takenAt: '2019:01:02 10:00:00' });
-  const mid = await makeJpeg({ label: 'mid', takenAt: '2021:06:07 10:00:00' });
-  const none = await makeJpeg({ label: 'none' });
+  const old = await makeJpeg({ seed: 2, takenAt: '2019:01:02 10:00:00' });
+  const mid = await makeJpeg({ seed: 2, takenAt: '2021:06:07 10:00:00' });
+  const none = await makeJpeg({ seed: 2 });
   await upload(agent, [{ buffer: mid, name: 'mid.jpg' }, { buffer: none, name: 'none.jpg' }, { buffer: old, name: 'old.jpg' }]).expect(201);
 
   const desc = (await agent.get('/api/photos?order=desc').expect(200)).body.photos;
