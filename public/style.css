@@ -57,3 +57,4 @@ input[type=text], input[type=email], input[type=password], select { padding:9px 
   main { padding:10px; }
   .card { padding:12px; }
 }
+.card h3 { margin-top: 0; }
