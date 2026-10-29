@@ -34,7 +34,7 @@ Settings are listed in `.env.example` (port, data folder, upload limits, secure 
 
 **Thumbnails are generated on the server.** `src/photoStore.js` saves the original and a 320px JPEG thumbnail (`src/images.js`, sharp) during upload. The gallery, album pages and the shared page only request `/thumb` URLs. Full-size images are requested only in the full-screen viewer.
 
-**Turning off sharing blocks access immediately, checked on the server.** A shared album has a random token (`albums.share_token`, 18 random bytes). Every public request (`src/routes/public.js`) looks the token up in the database. Turning sharing off sets the token to `NULL`, so the next request returns 404 for the album page, thumbnails and full-size files. There is no cache of the token and public responses send `Cache-Control: no-store`. A photo is only served through a link if it is in that album. The tests cover this.
+**Turning off sharing blocks access immediately, checked on the server.** A shared album has a random token (`albums.share_token`, 18 random bytes). Every public request (`src/routes/public.js`) looks the token up in the database. Turning sharing off sets the token to `NULL`, so the next request returns 404 for the album page, thumbnails and full-size files. The server keeps no cache of the token and public responses send `Cache-Control: no-store`, so browsers should not reuse them. This stops all new access; it cannot take back a photo someone already downloaded or saved. A photo is only served through a link if it is in that album. The tests cover this.
 
 ## Data model
 
@@ -79,7 +79,7 @@ Not done, and what I would do with more time:
 
 ## AI tools used
 
-Claude (through Instinct, an AI assistant) wrote the first version of the code, tests and this README from the assignment brief. I reviewed the code and can explain it in the video. AI also helped debug library API differences (archiver 8, Express 5, sharp EXIF writing).
+AI coding assistance was used for scaffolding the project, writing the first version of the backend, frontend and tests, writing this README, and debugging library API differences (archiver 8, Express 5, sharp EXIF writing). I reviewed the code and can explain every part of it in the video. The demo photos are generated placeholder images, not real photos.
 
 ## Project layout
 

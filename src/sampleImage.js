@@ -7,7 +7,7 @@ async function makeJpeg({ width = 1200, height = 800, color = '#3b82f6', label =
     `<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg">
       <rect width="100%" height="100%" fill="${color}"/>
       <circle cx="${width * 0.7}" cy="${height * 0.35}" r="${height * 0.18}" fill="rgba(255,255,255,0.35)"/>
-      <text x="40" y="${height - 50}" font-size="${Math.round(height / 9)}" font-family="sans-serif" fill="white">${label}</text>
+      <text x="${width / 2}" y="${height * 0.62}" text-anchor="middle" font-size="${Math.round(height / 12)}" font-family="sans-serif" fill="white">${label}</text>
     </svg>`
   );
   let img = sharp(svg).jpeg({ quality: 85 });

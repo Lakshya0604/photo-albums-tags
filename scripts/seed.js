@@ -20,7 +20,7 @@ const PHOTOS = [
   ['Autumn leaves', '#b45309', '2022:10:22 15:20:00', ['autumn']],
   ['Snowy cabin', '#94a3b8', '2023:01:14 11:00:00', ['winter', 'mountains']],
   ['Market stall', '#db2777', '2021:11:05 10:10:00', ['city', 'food']],
-  ['No EXIF date (uses upload date)', '#7c3aed', null, ['demo']],
+  ['No EXIF date', '#7c3aed', null, ['demo']],
 ];
 
 async function seed(config = loadConfig()) {
